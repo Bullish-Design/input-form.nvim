@@ -276,4 +276,10 @@ function M:select_id(id)
   return false
 end
 
+--- Programmatically set the selected value by option id.
+---@param v any Option id to select.
+function M:set_value(v)
+  self:select_id(v)
+end
+
 return M

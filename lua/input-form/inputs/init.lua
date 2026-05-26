@@ -29,6 +29,13 @@ function M.build(spec)
   input.validator = spec.validator
   input._touched = false
   input._error = nil
+  input.field_keymaps = spec.keymaps
+  input.action = spec.action
+  input.on_focus = spec.on_focus
+  input.on_blur = spec.on_blur
+  input.complete = spec.complete
+  input.complete_opts = spec.complete_opts
+  input.meta = spec.meta
   return input
 end
 
