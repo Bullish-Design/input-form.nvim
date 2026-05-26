@@ -147,4 +147,10 @@ function M:set(v)
   end
 end
 
+--- Programmatically set the checkbox value (alias for :set()).
+---@param v any Truthy for checked, falsey for unchecked.
+function M:set_value(v)
+  self:set(v)
+end
+
 return M

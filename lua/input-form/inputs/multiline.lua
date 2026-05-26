@@ -69,6 +69,16 @@ function M:value()
   return self._value
 end
 
+--- Programmatically set the field value.
+---@param v string
+function M:set_value(v)
+  self._value = v or ""
+  if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
+    local lines = vim.split(self._value, "\n", { plain = true })
+    vim.api.nvim_buf_set_lines(self.buf, 0, -1, false, lines)
+  end
+end
+
 function M:unmount()
   self._value = self:value()
   if self.win and vim.api.nvim_win_is_valid(self.win) then

@@ -67,6 +67,15 @@ function M:value()
   return self._value
 end
 
+--- Programmatically set the field value.
+---@param v string
+function M:set_value(v)
+  self._value = v or ""
+  if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
+    vim.api.nvim_buf_set_lines(self.buf, 0, -1, false, { self._value })
+  end
+end
+
 --- Close the window and buffer, caching the current value.
 function M:unmount()
   self._value = self:value()

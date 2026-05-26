@@ -302,6 +302,53 @@ function M:results()
   return out
 end
 
+--- Look up an input by field name.
+---@param name string
+---@return table|nil
+function M:_find_input(name)
+  for _, input in ipairs(self._inputs) do
+    if input.name == name then
+      return input
+    end
+  end
+  return nil
+end
+
+--- Get the current value of a single field by name.
+---@param name string
+---@return any|nil value, or nil if the field does not exist
+function M:get_value(name)
+  local input = self:_find_input(name)
+  if input then
+    return input:value()
+  end
+  return nil
+end
+
+--- Set the value of a single field by name.
+---@param name string
+---@param value any
+function M:set_value(name, value)
+  local input = self:_find_input(name)
+  if input and input.set_value then
+    input:set_value(value)
+  end
+end
+
+--- Re-render the form (re-validate visible fields). Call after set_value()
+--- to refresh the display when programmatically changing values from callbacks.
+function M:render()
+  if not self._visible then
+    return
+  end
+  for _, input in ipairs(self._inputs) do
+    if input._touched then
+      self:_validate_input(input)
+      self:_render_validation(input)
+    end
+  end
+end
+
 --- Return the currently focused input object, or nil if unavailable.
 ---@return table|nil
 function M:get_focused_field()
