@@ -301,6 +301,19 @@ function M:results()
   return out
 end
 
+--- Return the currently focused input object, or nil if unavailable.
+---@return table|nil
+function M:get_focused_field()
+  if not self._visible then
+    return nil
+  end
+  local input = self._inputs[self._focus_idx]
+  if not input or not is_focusable(input) then
+    return nil
+  end
+  return input
+end
+
 --- Submit the form: gather values, run validators, and invoke
 --- `on_submit(results)` only if everything validates. If any input has an
 --- error, submission is blocked, all inputs are force-validated (so the user
@@ -742,9 +755,45 @@ function M:_focus(idx)
   if not is_focusable(self._inputs[idx]) then
     idx = self:_next_focusable(idx, 1)
   end
+  local prev_idx = self._focus_idx
+  local prev_input = self._inputs[prev_idx]
+  local next_input = self._inputs[idx]
+
+  if prev_idx ~= idx and prev_input and is_focusable(prev_input) then
+    self:_on_field_blur(prev_input)
+  end
+
   self._focus_idx = idx
-  self._inputs[idx]:focus()
+  next_input:focus()
+
+  if next_input then
+    self:_on_field_focus(next_input)
+  end
 end
+
+function M:_on_field_focus(input)
+  self:_activate_field_keymaps(input)
+  if input.complete and input.buf and vim.api.nvim_buf_is_valid(input.buf) then
+    vim.b[input.buf].input_form_field = input.name
+  end
+  if input.on_focus then
+    input.on_focus(self, input)
+  end
+end
+
+function M:_on_field_blur(input)
+  self:_deactivate_field_keymaps(input)
+  if input.buf and vim.api.nvim_buf_is_valid(input.buf) then
+    vim.b[input.buf].input_form_field = nil
+  end
+  if input.on_blur then
+    input.on_blur(self, input)
+  end
+end
+
+function M:_activate_field_keymaps(_input) end
+
+function M:_deactivate_field_keymaps(_input) end
 
 function M:focus_next()
   self:_focus(self:_next_focusable(self._focus_idx + 1, 1))
@@ -821,12 +870,53 @@ function M:_install_keymaps(input)
     vim.keymap.set("n", "i", "<Nop>", { buffer = buf, nowait = true, silent = true })
     vim.keymap.set("n", "a", "<Nop>", { buffer = buf, nowait = true, silent = true })
   elseif input.type == "text" then
-    -- Single-line text inputs must never contain newlines. <CR> in insert
-    -- mode just exits insert mode (accepting the value) rather than inserting
-    -- a line break. Multiline inputs intentionally keep <CR> for newline entry.
-    map("i", "<CR>", function()
-      vim.cmd("stopinsert")
+    if input.action then
+      local form = self
+      map("i", "<CR>", function()
+        vim.cmd("stopinsert")
+        input.action(form, input)
+      end)
+      map("n", "<CR>", function()
+        input.action(form, input)
+      end)
+    else
+      -- Single-line text inputs must never contain newlines. <CR> in insert
+      -- mode just exits insert mode (accepting the value) rather than inserting
+      -- a line break. Multiline inputs intentionally keep <CR> for newline entry.
+      map("i", "<CR>", function()
+        vim.cmd("stopinsert")
+      end)
+    end
+  elseif input.type == "multiline" then
+    if input.action then
+      local form = self
+      map("n", "<CR>", function()
+        input.action(form, input)
+      end)
+    end
+  end
+
+  if input.type == "select" and input.action then
+    local form = self
+    map("n", km.open_select, function()
+      input.action(form, input)
     end)
+  elseif input.type == "checkbox" and km.open_select and km.open_select ~= km.toggle and input.action then
+    local form = self
+    map("n", km.open_select, function()
+      input.action(form, input)
+    end)
+  end
+
+  if input.field_keymaps then
+    local form = self
+    for lhs, fn in pairs(input.field_keymaps) do
+      for _, mode in ipairs({ "n", "i" }) do
+        vim.keymap.set(mode, lhs, function()
+          fn(form, input)
+        end, { buffer = buf, nowait = true, silent = true })
+      end
+    end
   end
 end
 
