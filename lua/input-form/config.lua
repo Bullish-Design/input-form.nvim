@@ -47,6 +47,8 @@ M.defaults = {
     --- Toggle a help popup listing every active keymap. The popup opens
     --- directly below the form window and closes on the same key.
     help = "?",
+    --- Trigger completion for fields that define a completion source.
+    complete = "<C-Space>",
   },
   --- Options for `select` inputs.
   select = {

@@ -227,6 +227,7 @@ function M:show()
     input:mount(mount_opts)
     self:_install_keymaps(input)
     self:_install_validation(input)
+    self:_install_auto_complete(input)
     ::continue::
   end
 
@@ -556,6 +557,15 @@ function M:_help_entries()
   if has_checkbox then
     add(km.toggle, "toggle checkbox")
   end
+  local focused = self._inputs[self._focus_idx]
+  if focused and focused.field_keymaps then
+    for lhs, _ in pairs(focused.field_keymaps) do
+      table.insert(entries, { lhs, focused.name .. " action" })
+    end
+  end
+  if focused and focused.complete then
+    add(km.complete, "complete")
+  end
   add(km.submit, "submit form")
   add(km.cancel, "cancel form")
   add(km.help, "toggle this help")
@@ -795,6 +805,141 @@ function M:_activate_field_keymaps(_input) end
 
 function M:_deactivate_field_keymaps(_input) end
 
+function M:_completion_segment(line, col, sep)
+  local before = line:sub(1, col)
+  local seg_start = 1
+  local last_sep = before:reverse():find(vim.pesc(sep))
+  if last_sep then
+    seg_start = #before - last_sep + 2
+  end
+  local segment = before:sub(seg_start)
+  local trimmed = segment:match("^%s*(.*)$") or segment
+  local trim_offset = #segment - #trimmed
+  local start_col = seg_start + trim_offset
+  return trimmed, start_col
+end
+
+function M:_trigger_completion()
+  local input = self._inputs[self._focus_idx]
+  if not input or not input.complete then
+    return
+  end
+  local buf = input.buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local items
+  if type(input.complete) == "function" then
+    items = input.complete({
+      value = input:value(),
+      cursor = vim.api.nvim_win_get_cursor(0),
+      field = input,
+      form = self,
+    })
+  elseif type(input.complete) == "table" then
+    items = input.complete
+  end
+  if not items or #items == 0 then
+    return
+  end
+
+  local opts = input.complete_opts or {}
+  local line = vim.api.nvim_get_current_line()
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  local prefix, start_col
+  if opts.separator then
+    prefix, start_col = self:_completion_segment(line, col, opts.separator)
+  else
+    local before = line:sub(1, col)
+    local word_start = before:match(".*%s()%S*$") or 1
+    prefix = before:sub(word_start)
+    start_col = word_start
+  end
+
+  local words = {}
+  local prefix_lower = prefix:lower()
+  for _, item in ipairs(items) do
+    local word, abbr, info
+    if type(item) == "string" then
+      word = item
+      abbr = item
+    elseif type(item) == "table" then
+      word = item.value or item.label
+      abbr = item.label or word
+      info = item.description
+    end
+    if word and (prefix_lower == "" or word:lower():sub(1, #prefix_lower) == prefix_lower) then
+      local entry = { word = word, abbr = abbr }
+      if info then
+        entry.info = info
+      end
+      table.insert(words, entry)
+    end
+  end
+  if #words == 0 then
+    return
+  end
+
+  local mode = vim.api.nvim_get_mode().mode
+  if mode ~= "i" and mode ~= "ic" then
+    vim.cmd("startinsert")
+  end
+  vim.fn.complete(start_col, words)
+end
+
+function M:_install_auto_complete(input)
+  local opts = input.complete_opts
+  if not (input.complete and opts and opts.auto) then
+    return
+  end
+  local buf = input.buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local form = self
+  local min_chars = opts.min_chars or 1
+  local debounce_ms = opts.debounce_ms or 150
+  local timer = nil
+  local group = vim.api.nvim_create_augroup("InputFormComplete_" .. tostring(buf), { clear = true })
+  vim.api.nvim_create_autocmd("TextChangedI", {
+    group = group,
+    buffer = buf,
+    callback = function()
+      if timer then
+        timer:stop()
+        timer:close()
+        timer = nil
+      end
+      local line = vim.api.nvim_get_current_line()
+      local col = vim.api.nvim_win_get_cursor(0)[2]
+      local before = line:sub(1, col)
+      local check_text = before
+      if opts.separator then
+        local segment = form:_completion_segment(line, col, opts.separator)
+        check_text = segment
+      end
+      if #check_text < min_chars then
+        return
+      end
+      if debounce_ms > 0 then
+        timer = vim.uv.new_timer()
+        timer:start(debounce_ms, 0, vim.schedule_wrap(function()
+          if timer then
+            timer:stop()
+            timer:close()
+            timer = nil
+          end
+          if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_get_mode().mode == "i" then
+            form:_trigger_completion()
+          end
+        end))
+      else
+        form:_trigger_completion()
+      end
+    end,
+  })
+end
+
 function M:focus_next()
   self:_focus(self:_next_focusable(self._focus_idx + 1, 1))
 end
@@ -848,10 +993,27 @@ function M:_install_keymaps(input)
     self:toggle_help()
   end)
 
-  if input.type == "select" then
-    map("n", km.open_select, function()
-      input:open_dropdown()
+  if input.complete then
+    local form = self
+    map("i", km.complete, function()
+      form:_trigger_completion()
     end)
+    map("n", km.complete, function()
+      form:_trigger_completion()
+    end)
+  end
+
+  if input.type == "select" then
+    if input.action then
+      local form = self
+      map("n", km.open_select, function()
+        input.action(form, input)
+      end)
+    else
+      map("n", km.open_select, function()
+        input:open_dropdown()
+      end)
+    end
     -- Block insert mode on the select display buffer.
     vim.keymap.set("n", "i", "<Nop>", { buffer = buf, nowait = true, silent = true })
     vim.keymap.set("n", "a", "<Nop>", { buffer = buf, nowait = true, silent = true })
@@ -862,9 +1024,16 @@ function M:_install_keymaps(input)
       input:toggle()
     end)
     if km.open_select and km.open_select ~= km.toggle then
-      map("n", km.open_select, function()
-        input:toggle()
-      end)
+      if input.action then
+        local form = self
+        map("n", km.open_select, function()
+          input.action(form, input)
+        end)
+      else
+        map("n", km.open_select, function()
+          input:toggle()
+        end)
+      end
     end
     -- Block insert mode on the checkbox display buffer.
     vim.keymap.set("n", "i", "<Nop>", { buffer = buf, nowait = true, silent = true })
@@ -894,18 +1063,6 @@ function M:_install_keymaps(input)
         input.action(form, input)
       end)
     end
-  end
-
-  if input.type == "select" and input.action then
-    local form = self
-    map("n", km.open_select, function()
-      input.action(form, input)
-    end)
-  elseif input.type == "checkbox" and km.open_select and km.open_select ~= km.toggle and input.action then
-    local form = self
-    map("n", km.open_select, function()
-      input.action(form, input)
-    end)
   end
 
   if input.field_keymaps then
